@@ -23,3 +23,32 @@ func TestContainerMountSchemaUsesRouterOS721ListField(t *testing.T) {
 		t.Fatal("container mount schema must not expose obsolete name")
 	}
 }
+
+func TestContainerDefinesAllLifecycleTimeouts(t *testing.T) {
+	timeouts := ResourceContainer().Timeouts
+	if timeouts == nil || timeouts.Create == nil || timeouts.Update == nil || timeouts.Delete == nil {
+		t.Fatal("container resource must define create, update, and delete timeouts")
+	}
+}
+
+func TestContainerStateSupportsRouterOS721Flags(t *testing.T) {
+	tests := []struct {
+		name string
+		item MikrotikItem
+		want string
+	}{
+		{name: "legacy status", item: MikrotikItem{"status": "running"}, want: "running"},
+		{name: "running flag", item: MikrotikItem{"running": "true"}, want: "running"},
+		{name: "extracting flag", item: MikrotikItem{"extracting": "true"}, want: "extracting"},
+		{name: "stopped flag", item: MikrotikItem{"stopped": "true"}, want: "stopped"},
+		{name: "missing state", item: MikrotikItem{}, want: "unknown"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := containerState(test.item); got != test.want {
+				t.Fatalf("containerState() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

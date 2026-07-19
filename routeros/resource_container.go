@@ -198,8 +198,19 @@ func ResourceContainer() *schema.Resource {
 	resRead := func(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 		// Run DefaultRead.
 		diags := ResourceRead(ctx, resSchema, d, m)
-		if diags.HasError() {
+		if diags.HasError() || d.Id() == "" {
 			return diags
+		}
+
+		_, state, err := readContainerState(resSchema, d, m)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		if err := d.Set("status", state); err != nil {
+			return diag.FromErr(err)
+		}
+		if err := d.Set("running", state == "running"); err != nil {
+			return diag.FromErr(err)
 		}
 
 		tag, ok := d.Get("tag").(string)
@@ -246,9 +257,9 @@ func ResourceContainer() *schema.Resource {
 			// Remove (:////)adguard/adguardhome:latest
 			tag = strings.TrimLeft(tag, ":/")
 
-			d.Set("remote_image", strings.TrimPrefix(tag, registryUrl))
-
-			d.Set("running", d.Get("status").(string) == "running")
+			if err := d.Set("remote_image", strings.TrimPrefix(tag, registryUrl)); err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		return nil
@@ -262,14 +273,18 @@ func ResourceContainer() *schema.Resource {
 		}
 
 		if d.Get("running").(bool) {
-			startContainer(ctx, resSchema, d, m)
+			if diags := startContainer(ctx, resSchema, d, m, schema.TimeoutCreate); diags.HasError() {
+				return diags
+			}
 		}
 
-		return ResourceRead(ctx, resSchema, d, m)
+		return resRead(ctx, d, m)
 	}
 
 	resUpdate := func(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-		stopContainer(ctx, resSchema, d, m)
+		if diags := stopContainer(ctx, resSchema, d, m, schema.TimeoutUpdate); diags.HasError() {
+			return diags
+		}
 
 		// Run DefaultUpdate.
 		diags := ResourceUpdate(ctx, resSchema, d, m)
@@ -277,15 +292,19 @@ func ResourceContainer() *schema.Resource {
 			return diags
 		}
 		if d.Get("running").(bool) {
-			startContainer(ctx, resSchema, d, m)
+			if diags := startContainer(ctx, resSchema, d, m, schema.TimeoutUpdate); diags.HasError() {
+				return diags
+			}
 		}
 
-		return ResourceRead(ctx, resSchema, d, m)
+		return resRead(ctx, d, m)
 	}
 
 	resDelete := func(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-		// Stop container
-		stopContainer(ctx, resSchema, d, m)
+		// Stop container.
+		if diags := stopContainer(ctx, resSchema, d, m, schema.TimeoutDelete); diags.HasError() {
+			return diags
+		}
 
 		// Run DefaultDelete.
 		return ResourceDelete(ctx, resSchema, d, m)
@@ -305,28 +324,57 @@ func ResourceContainer() *schema.Resource {
 
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(10 * time.Minute),
+			Update: schema.DefaultTimeout(10 * time.Minute),
 			Delete: schema.DefaultTimeout(1 * time.Minute),
 		},
 	}
 }
 
-func startContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func containerState(item MikrotikItem) string {
+	if status := item["status"]; status != "" {
+		return status
+	}
+
+	for _, state := range []string{"running", "starting", "stopping", "extracting", "stopped"} {
+		if BoolFromMikrotikJSON(item[state]) {
+			return state
+		}
+	}
+
+	return "unknown"
+}
+
+func readContainerState(s map[string]*schema.Schema, d *schema.ResourceData, m interface{}) (interface{}, string, error) {
+	metadata := GetMetadata(s)
+	res, err := ReadItems(&ItemId{metadata.IdType, d.Id()}, metadata.Path, m.(Client))
+	if err != nil {
+		return res, "", err
+	}
+	if res == nil || len(*res) == 0 {
+		return res, "", fmt.Errorf("container instance (%s) was not found", d.Id())
+	}
+
+	return res, containerState((*res)[0]), nil
+}
+
+func startContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.ResourceData, m interface{}, timeoutKey string) diag.Diagnostics {
+	_, currentState, err := readContainerState(s, d, m)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	if currentState == "running" {
+		return nil
+	}
+
 	stopStateConf := &retry.StateChangeConf{
 		Pending: []string{"pulling", "extracting"},
 		Target:  []string{"stopped"},
 		Refresh: func() (result interface{}, state string, err error) {
-			metadata := GetMetadata(s)
-
-			res, err := ReadItems(&ItemId{metadata.IdType, d.Id()}, metadata.Path, m.(Client))
-			if err != nil {
-				return res, (*res)[0]["status"], err
-			}
-
-			return res, (*res)[0]["status"], nil
+			return readContainerState(s, d, m)
 		},
-		Timeout: d.Timeout(schema.TimeoutCreate),
+		Timeout: d.Timeout(timeoutKey),
 	}
-	_, err := stopStateConf.WaitForStateContext(ctx)
+	_, err = stopStateConf.WaitForStateContext(ctx)
 	if err != nil {
 		err = fmt.Errorf("error waiting for container instance (%s) to be pulled: %s", d.Id(), err)
 		return diag.FromErr(err)
@@ -340,6 +388,7 @@ func startContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.
 	}
 	if m.(Client).GetTransport() == TransportREST {
 		resUrl.Path += "/start"
+		item = MikrotikItem{Id.String(): d.Id()}
 	}
 
 	err = m.(Client).SendRequest(crudStart, resUrl, item, nil)
@@ -348,19 +397,12 @@ func startContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.
 	}
 
 	startStateConf := &retry.StateChangeConf{
-		Pending: []string{"stopped"},
+		Pending: []string{"stopped", "starting"},
 		Target:  []string{"running"},
 		Refresh: func() (result interface{}, state string, err error) {
-			metadata := GetMetadata(s)
-
-			res, err := ReadItems(&ItemId{metadata.IdType, d.Id()}, metadata.Path, m.(Client))
-			if err != nil {
-				return res, (*res)[0]["status"], err
-			}
-
-			return res, (*res)[0]["status"], nil
+			return readContainerState(s, d, m)
 		},
-		Timeout: d.Timeout(schema.TimeoutCreate),
+		Timeout: d.Timeout(timeoutKey),
 	}
 	_, err = startStateConf.WaitForStateContext(ctx)
 	if err != nil {
@@ -371,7 +413,15 @@ func startContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.
 	return nil
 }
 
-func stopContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func stopContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.ResourceData, m interface{}, timeoutKey string) diag.Diagnostics {
+	_, currentState, err := readContainerState(s, d, m)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	if currentState == "stopped" {
+		return nil
+	}
+
 	item := MikrotikItem{"number": d.Id()}
 
 	var resUrl = &URL{
@@ -379,27 +429,21 @@ func stopContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.R
 	}
 	if m.(Client).GetTransport() == TransportREST {
 		resUrl.Path += "/stop"
+		item = MikrotikItem{Id.String(): d.Id()}
 	}
 
-	err := m.(Client).SendRequest(crudStop, resUrl, item, nil)
+	err = m.(Client).SendRequest(crudStop, resUrl, item, nil)
 	if err != nil {
 		return diag.FromErr(err)
 	}
 
 	stopStateConf := &retry.StateChangeConf{
-		Pending: []string{"stopping"},
+		Pending: []string{"running", "stopping"},
 		Target:  []string{"stopped"},
 		Refresh: func() (result interface{}, state string, err error) {
-			metadata := GetMetadata(s)
-
-			res, err := ReadItems(&ItemId{metadata.IdType, d.Id()}, metadata.Path, m.(Client))
-			if err != nil {
-				return res, (*res)[0]["status"], err
-			}
-
-			return res, (*res)[0]["status"], nil
+			return readContainerState(s, d, m)
 		},
-		Timeout: d.Timeout(schema.TimeoutDelete),
+		Timeout: d.Timeout(timeoutKey),
 	}
 	_, err = stopStateConf.WaitForStateContext(ctx)
 	if err != nil {
