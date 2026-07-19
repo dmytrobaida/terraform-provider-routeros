@@ -40,6 +40,7 @@ const (
 	crudMove
 	crudStart
 	crudStop
+	crudMakeStatic
 	crudGenerateKey
 )
 

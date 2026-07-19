@@ -42,6 +42,7 @@ var (
 		crudMove:        "POST",
 		crudStart:       "POST",
 		crudStop:        "POST",
+		crudMakeStatic:  "POST",
 		crudGenerateKey: "POST",
 	}
 )

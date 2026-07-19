@@ -1,6 +1,9 @@
 package routeros
 
 import (
+	"context"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
@@ -10,6 +13,7 @@ func ResourceDhcpServerLease() *schema.Resource {
 	resSchema := map[string]*schema.Schema{
 		MetaResourcePath: PropResourcePath("/ip/dhcp-server/lease"),
 		MetaId:           PropId(Id),
+		MetaSkipFields:   PropSkipFields("make_static"),
 
 		"active_address": {
 			Type:        schema.TypeString,
@@ -132,6 +136,12 @@ func ResourceDhcpServerLease() *schema.Resource {
 			Optional:    true,
 			Description: "Time that the client may use the address. If set to 0s lease will never expire.",
 		},
+		"make_static": {
+			Type:        schema.TypeBool,
+			Optional:    true,
+			Default:     false,
+			Description: "Convert an imported dynamic lease to a static lease before updating it.",
+		},
 		"mac_address": {
 			Type:             schema.TypeString,
 			Required:         true,
@@ -172,12 +182,35 @@ func ResourceDhcpServerLease() *schema.Resource {
 				"assign address.",
 		},
 	}
+	update := DefaultUpdate(resSchema)
 	return &schema.Resource{
 		Description: "Creates a DHCP lease on the mikrotik device.",
 
 		CreateContext: DefaultCreate(resSchema),
 		ReadContext:   DefaultRead(resSchema),
-		UpdateContext: DefaultUpdate(resSchema),
+		UpdateContext: func(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+			if d.Get("make_static").(bool) {
+				metadata := GetMetadata(resSchema)
+				leases, err := ReadItems(&ItemId{metadata.IdType, d.Id()}, metadata.Path, m.(Client))
+				if err != nil {
+					return diag.FromErr(err)
+				}
+				if leases == nil || len(*leases) != 1 {
+					return diag.Errorf("expected one DHCP lease with ID %s", d.Id())
+				}
+				if BoolFromMikrotikJSON((*leases)[0]["dynamic"]) {
+					item := MikrotikItem{Id.String(): d.Id()}
+					url := &URL{Path: metadata.Path}
+					if m.(Client).GetTransport() == TransportREST {
+						url.Path += "/make-static"
+					}
+					if err := m.(Client).SendRequest(crudMakeStatic, url, item, nil); err != nil {
+						return diag.FromErr(err)
+					}
+				}
+			}
+			return update(ctx, d, m)
+		},
 		DeleteContext: DefaultDelete(resSchema),
 		Importer: &schema.ResourceImporter{
 			StateContext: ImportStateCustomContext(resSchema),
