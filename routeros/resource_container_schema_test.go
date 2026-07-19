@@ -31,6 +31,15 @@ func TestContainerDefinesAllLifecycleTimeouts(t *testing.T) {
 	}
 }
 
+func TestContainerPullAllowsTransientUnknownState(t *testing.T) {
+	for _, state := range containerPullPendingStates {
+		if state == "unknown" {
+			return
+		}
+	}
+	t.Fatal("container pull must tolerate RouterOS returning no lifecycle flag")
+}
+
 func TestContainerStateSupportsRouterOS721Flags(t *testing.T) {
 	tests := []struct {
 		name string

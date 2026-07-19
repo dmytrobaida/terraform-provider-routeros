@@ -330,6 +330,8 @@ func ResourceContainer() *schema.Resource {
 	}
 }
 
+var containerPullPendingStates = []string{"unknown", "pulling", "extracting"}
+
 func containerState(item MikrotikItem) string {
 	if status := item["status"]; status != "" {
 		return status
@@ -367,7 +369,7 @@ func startContainer(ctx context.Context, s map[string]*schema.Schema, d *schema.
 	}
 
 	stopStateConf := &retry.StateChangeConf{
-		Pending: []string{"pulling", "extracting"},
+		Pending: containerPullPendingStates,
 		Target:  []string{"stopped"},
 		Refresh: func() (result interface{}, state string, err error) {
 			return readContainerState(s, d, m)
