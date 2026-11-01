@@ -2,6 +2,34 @@ package routeros
 
 import "testing"
 
+func TestContainerSchemaSupportsRouterOS723RestartFields(t *testing.T) {
+	schema := ResourceContainer().Schema
+	for _, name := range []string{"restart_policy", "restart_interval"} {
+		field, ok := schema[name]
+		if !ok || !field.Optional || field.ForceNew {
+			t.Fatalf("%s must be an optional, updatable field", name)
+		}
+		if len(field.ConflictsWith) != 1 || field.ConflictsWith[0] != "auto_restart_interval" {
+			t.Fatalf("%s must reject the legacy restart setting", name)
+		}
+	}
+	validate := schema["restart_policy"].ValidateFunc
+	for _, value := range []string{"no", "on-failure", "always"} {
+		if _, errors := validate(value, "restart_policy"); len(errors) != 0 {
+			t.Fatalf("valid restart policy %q rejected: %v", value, errors)
+		}
+	}
+	if _, errors := validate("invalid", "restart_policy"); len(errors) == 0 {
+		t.Fatal("invalid restart policy accepted")
+	}
+	if schema["restart_interval"].DiffSuppressFunc == nil {
+		t.Fatal("restart interval must normalize RouterOS time values")
+	}
+	if len(schema["auto_restart_interval"].ConflictsWith) != 2 {
+		t.Fatal("legacy restart interval must reject both modern restart settings")
+	}
+}
+
 func TestContainerSchemaUsesRouterOS721MountFields(t *testing.T) {
 	schema := ResourceContainer().Schema
 
