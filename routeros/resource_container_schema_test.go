@@ -2,6 +2,27 @@ package routeros
 
 import "testing"
 
+func TestContainerSchemaSupportsRouterOS723EnvironmentLists(t *testing.T) {
+	fields := ResourceContainer().Schema
+	modern := fields["envlists"]
+	if modern == nil || !modern.Optional || modern.ForceNew || modern.Elem == nil {
+		t.Fatal("envlists must be an optional, updatable string set")
+	}
+	if _, exists := fields["envlist"]; exists {
+		t.Fatal("container must omit legacy envlist alias to prevent perpetual drift")
+	}
+	if !ResourceContainerEnvs().Schema["value"].Sensitive {
+		t.Fatal("environment values must be sensitive")
+	}
+	envs := ResourceContainerEnvs().Schema
+	if list := envs["list"]; list == nil || !list.Required || list.Optional {
+		t.Fatal("environment resource must require the modern list field")
+	}
+	if _, exists := envs["name"]; exists {
+		t.Fatal("environment resource must omit legacy name to prevent Pulumi auto-naming")
+	}
+}
+
 func TestContainerSchemaSupportsRouterOS723RestartFields(t *testing.T) {
 	schema := ResourceContainer().Schema
 	for _, name := range []string{"restart_policy", "restart_interval"} {

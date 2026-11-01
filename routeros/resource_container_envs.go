@@ -10,10 +10,10 @@ func ResourceContainerEnvs() *schema.Resource {
 		MetaResourcePath: PropResourcePath("/container/envs"),
 		MetaId:           PropId(Id),
 
-		"name": {
+		"list": {
 			Type:        schema.TypeString,
 			Required:    true,
-			Description: "Name of the environment variables list.",
+			Description: "Environment variables list (RouterOS 7.23 and newer).",
 		},
 		"key": {
 			Type:        schema.TypeString,
@@ -23,6 +23,7 @@ func ResourceContainerEnvs() *schema.Resource {
 		"value": {
 			Type:        schema.TypeString,
 			Required:    true,
+			Sensitive:   true,
 			Description: "Value of the environment variable.",
 		},
 	}
@@ -40,32 +41,3 @@ func ResourceContainerEnvs() *schema.Resource {
 		Schema: resSchema,
 	}
 }
-
-// TODO: cleaner would be if we model it like envlist directly
-/*
-resource "routeros_container_envs" "test" {
-  name = "test"
-
-  env {
-    key   = "foo"
-    value = "bar"
-  }
-
-  env {
-    key   = "hello"
-    value = "world"
-  }
-}
-
-resource "routeros_container_envs" "test_foo" {
-	name  = "test"
-	key   = "foo"
-	value = "bar"
-  }
-
-  resource "routeros_container_envs" "test_hello" {
-	name  = "test"
-	key   = "hello"
-	value = "wold"
-  }
-*/

@@ -97,10 +97,11 @@ func ResourceContainer() *schema.Resource {
 			Optional:    true,
 			Description: "An ENTRYPOINT allows to specify executable to run when starting container. Example: /bin/sh",
 		},
-		"envlist": {
-			Type:        schema.TypeString,
+		"envlists": {
+			Type:        schema.TypeSet,
 			Optional:    true,
-			Description: "list of environmental variables (configured under /container envs ) to be used with container",
+			Elem:        &schema.Schema{Type: schema.TypeString},
+			Description: "Environment variable lists to use with the container (RouterOS 7.23 and newer).",
 		},
 		"file": {
 			Type:         schema.TypeString,
